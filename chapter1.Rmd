@@ -214,8 +214,8 @@ tidy_bronte %>%
 
 New opreation: binding the data frames together
 two functions used: `pivot_wider()` and `pivot_longer()`, both from `tidyr`
-pivot_longer()（宽 → 长）： 适用于 数据存储、可视化、建模。
-pivot_wider()（长 → 宽）： 适用于 数据展示、某些统计方法。
+pivot_longer()（宽 → 长）： 适用于数据存储、可视化、建模。
+pivot_wider()（长 → 宽）： 适用于数据展示、某些统计方法。
 两者互逆，转换方式取决于分析需求。
 ```{r}
 library(tidyr)
