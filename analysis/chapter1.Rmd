@@ -1,0 +1,278 @@
+---
+title: "Chapter 1"
+author: "Hongxu Zhou"
+date: "2025-02-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidytext)
+library(stringr)
+```
+
+# 1. The tidy text format
+## 1.1 Tidy text
+In tidyverse, teh tidy text format is like a table with one-token-per-row. Like this:
+| document_id | word    | position |
+|------------|---------|----------|
+| 1          | I       | 1        |
+| 1          | love    | 2        |
+| 1          | data    | 3        |
+| 1          | science | 4        |
+
+## 1.2 The `unnest_tokens` function
+The `unnest_tokens` function is used to convert a text column into a tidy text format. For example:
+
+```{r cars}
+text <- c("Because I could not stop for Death -", 
+          "He kindly stopped for me -", 
+          "The Carriage held but just Ourselves -", 
+          "And Immortality.") 
+text
+```
+
+The text now is the raw data. We need to first convert it into a dataframe. This is a preparation step for the `unnest_tokens` function, which actually makes text compatible with tidy text analysis.
+```{r}
+library(dplyr)
+text_df <- tibble(line = 1:4, text = text) # tibble is the pro version of data.frame
+# The line above means to make a dataframe with two columns: line and text, line has 4 lines, text is the raw data corresponding to each line
+
+text_df
+```
+
+Next, we will take two steps:
+1. tokenisation
+2. transform it to a tidy data strucutre
+This is where `unnest_tokens` kicks in.
+
+```{r}
+library(tidytext)
+
+text_df %>% #pipe operator, the output of the previous step is the input of the next step
+  unnest_tokens(word, text)
+```
+
+Take a look at the result of the `unnest_tokens` function. The `word` column is the tokenised version of the `text` column. The `line` column is the original line number. Each line may contain multiple words, that is why some words have the same line value. 
+
+其实这里有一个问题，既然python可以无需先将raw 文本转化为dataframe，为什么R需要这么做呢？
+ChatGPT 答案：
+1. tidyverse 以 "tidy data" 为核心
+tidytext 遵循 tidy data 原则：每一行是一条观测数据（Observation）。
+R 的 data.frame 设计本质上就是为结构化数据优化的，适用于统计分析和可视化，而不像 Python 那样偏灵活的序列式数据结构。
+2. R 生态更偏向结构化数据
+R 的 dplyr、ggplot2、tidytext 全部基于 data.frame 设计，所以 R 的 NLP 处理流程也默认用 data.frame 存储 tokenized 结果。
+例如，如果我们要做词频统计，直接用 count(word) 会很方便：
+tidy_books %>% count(word, sort = TRUE)
+在 Python 里，我们可能需要 Counter 或 pandas 才能做到类似的事情。
+3. R 语言的向量化运算没有 Python 灵活
+R 的基础字符串操作能力没有 Python 强，很多操作依赖 stringr、tidytext 这些库，它们都默认基于 data.frame 进行计算。
+在 Python 里，我们可以用 map()、列表推导等方式处理文本，但 R 主要依赖 apply()、mutate() 这种 DataFrame 方式。
+
+To summarise, the pipeline so far is:
+1. import the raw data
+2. convert the raw data into a dataframe by using `tibble`
+  * we define the number of lines and the text content
+3. use `unnest_tokens` to convert the text column into a tidy text format
+  * Punctuation has been stripped (removed)
+  * Lowercase has been applied by default (to turn of, use `to_lower = FALSE`)
+
+---
+## 1.3 Tidying the works of Jan Austen
+The format of the JA corpus: One row per line
+THe content: Six completed, published novels by Austen
+```{r}
+library(janeaustenr)
+library(dplyr) #like pandas in python, but with operator %>%
+library(stringr) #like re + string 
+
+original_books <- austen_books() %>% #import the raw data
+  group_by(book) %>% #function provided by dplyr
+  mutate(linenumber = row_number(), #add a line number column, function provided by dplyr
+         chapter = cumsum(str_detect(text, #cumsumn calculates the cumulative sum, provided by dplyr
+                                     regex("^chapter [\\divxlc]",
+                                           ignore_case = TRUE)))) %>%
+  ungroup() #ungroup the data
+```
+
+对这段代码的详解：
+首先，这段代码不新建dataframe, 而是对原有数据做调整。
+`group_by()`通过使用数据集中的book标签对原有数据分类，然后`mutate()`新建两个列。在完成接下来的操作后，再使用`ungroup()`取消分类。
+`row_number()`的值取决于数据集的格式和大小。它从1开始计数，这点与其他语言的索引不同。在group中，它对于每个group都是独立的。即，每个group的第一行都是1，第二行是2，以此类推。 
+在处理文学文本时使用 row_number() 特别有意义，因为它可以帮助我们：
+* 定位具体段落
+* 分析文本结构
+* 在需要时还原文本的原始顺序
+`cumsum()`函数计算累积和。在这里，它用于计算章节编号。如果文本中包含 "Chapter 1"，则 chapter 列中的值为 1；如果包含 "Chapter 2"，则 chapter 列中的值为 3（1+2）；以此类推。
+Understanding the regex:
+1. ^
+表示行首匹配，确保匹配的文本必须从一行的开头开始。
+例如 "Chapter 1" 可以匹配，但 "Some text Chapter 1" 不能匹配。
+2. chapter
+匹配固定文本 "chapter"。
+因为 ignore_case = TRUE，所以 "Chapter"、"CHAPTER"、"cHaPtEr" 等大小写组合都能匹配。
+3. [\\divxlc]
+方括号 [] 表示字符类，匹配其中任意一个字符。
+\\d匹配任意数字 (0-9)，用于匹配阿拉伯数字编号（如 "Chapter 3"）。
+i v x l c：匹配罗马数字 I, V, X, L, C（小写），用于匹配罗马数字章节编号（如 "Chapter vi"）。
+ignore_case = TRUE 允许匹配 "CHAPTER IX"、"chapter X" 等大写罗马数字。
+
+The result is
+```{r}
+original_books
+```
+
+As we did before, we also need to restrucutre it in the **one-token-per-row** format. 
+```{r}
+library(tidytext)
+tidy_books <- original_books %>%
+  unnest_tokens(word, text)
+
+tidy_books
+```
+
+Removing the stop words
+Before removing the stop words, it is more reasonable to first check the most common words
+
+```{r}
+tidy_books %>%
+  count(word, sort = TRUE) # with sort = TRUE, the result will be sorted in descending order
+```
+注意这里时态没有被normalised， was和is是分开计数的。
+
+现在，我们移除stop words 
+```{r}
+data(stop_words) #tidyverse contained stop words list
+
+tidy_books <- tidy_books %>%
+  anti_join(stop_words) #anti_join() removes the rows that matches 
+```
+
+从使用`anti_join()`来移除stop words能够看出来tidyverse的基础思路，即所有的数据都基于df。移除词即是移除df中包含匹配的词的行。
+再来看看最常见的词
+```{r}
+tidy_books %>%
+  count(word, sort = TRUE)
+```
+分析之后的常见下一个步骤是visualisation
+```{r}
+library(ggplot2)
+
+tidy_books %>%
+  count(word, sort = TRUE) %>% 
+  filter(n > 600) %>% 
+  mutate(word = reorder(word, n)) %>% #reorder the words by the frequency
+  ggplot(aes(n, word))+
+           geom_col()+
+           labs(y = NULL)
+
+```
+
+这里需要补充ggplot2的画图逻辑
+
+## 1.4 The gutenbergr package
+No code practice here.
+
+## 1.5 Word frequencies
+Compare three datasets 
+First, download the data using `gutenberg_download()` function
+```{r}
+library(gutenbergr)
+# Dataset 1: Wells's scifi books
+hgwells <- gutenberg_download(c(35, 36, 5230, 159)) # the c() function is used to combine the book IDs
+```
+
+Second, convert the data into a tidy text format
+```{r}
+tidy_hgwells <- hgwells %>% 
+  unnest_tokens(word, text) %>% 
+  anti_join(stop_words)
+```
+Check the most common words
+```{r}
+tidy_hgwells %>% 
+  count(word, sort = TRUE)
+```
+Same operation to the third dataset
+```{r}
+bronte <- gutenberg_download(c(1260, 768, 969, 9182, 767))
+```
+
+Convert the data into a tidy text format
+```{r}
+tidy_bronte <- bronte %>% 
+  unnest_tokens(word, text) %>% 
+  anti_join(stop_words)
+```
+
+Check the most common words
+```{r}
+tidy_bronte %>% 
+  count(word, sort = TRUE)
+```
+
+New opreation: binding the data frames together
+two functions used: `pivot_wider()` and `pivot_longer()`, both from `tidyr`
+pivot_longer()（宽 → 长）： 适用于数据存储、可视化、建模。
+pivot_wider()（长 → 宽）： 适用于数据展示、某些统计方法。
+两者互逆，转换方式取决于分析需求。
+```{r}
+library(tidyr)
+
+freq <- bind_rows(mutate(tidy_bronte, author = "Brontë Sisters"),
+                  mutate(tidy_hgwells, author = "H G Wells"),
+                  mutate(tidy_books, author = 'Jane Austen')) %>% 
+  mutate(word = str_extract(word, "[a-z]+")) %>% 
+  count(author, word) %>% 
+  group_by(author) %>% 
+  mutate(proportion = n / sum(n)) %>% 
+  select(-n) %>% 
+  pivot_wider(names_from = author, values_from = proportion) %>%
+  pivot_longer('Brontë Sisters':'H G Wells',
+               names_to = "author",
+               values_to = "proportion")
+
+```
+对这段代码的解释：
+1.`stringr::str_extract()`：这个用来在数据集中提取字母，它和括号里的正则表达式一起使用，[a-z]指全部小写字母，+表示匹配一个或多个。整行代码的意思是仅保留纯字母，去掉标点符号和数字。是预处理的一部分。
+2. 整体思路：
+* 用`bind_rows()`将三个数据集合并成一个
+* 用`mutate()`为每个数据集打上作者标签
+之后是文本清理
+* 结合`mutate()`和`str_extract()`清理单词。
+只有在文本清理后，再去做词频统计才有意义。
+* 用`count()`计算每个作者的词频
+* 用`group_by(author)`将数据按作者分组
+* `propotion =` 计算占比
+然后是难点**数据重塑**
+* `pivot_wider()`将数据从长格式转换为宽格式，即每个作者一列
+* `pivot_longer()`将数据从宽格式转换为长格式，即每个单词一行，即以奥斯汀为基准，其他作者转换为长格式
+* 最终为便于比较的结构
+
+接下来是分析后的可视化
+```{r}
+library(scales) #for the percentage format
+
+ggplot(freq, aes(x = proportion, y = `Jane Austen`, color = abs(`Jane Austen` - proportion))) + 
+  geom_abline(color = "gray70", lty = 2) +
+  geom_jitter(alpha = 0.1, size = 2.5, width = 0.3, height = 0.3) + 
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5) + 
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  scale_color_gradient(limits = c(0, 0.001), 
+                       low = "darkslategray4", high = 'gray75') +
+  facet_wrap(~author, ncol = 2) +
+  theme(legend.position = "none") +
+  labs(y = "Jane Austen", x = NULL)
+```
+
+Quantitative comparation between the three datasets using correlation test
+```{r}
+cor.test(data = freq[freq$author == "Brontë Sisters",], 
+         ~ proportion + `Jane Austen`)
+```
+```{r}
+cor.test(data = freq[freq$author == "H G Wells",], 
+         ~ proportion + `Jane Austen`)
+```
