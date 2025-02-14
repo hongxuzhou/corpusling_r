@@ -1,0 +1,551 @@
+---
+title: "Text Mining Gutenberg Assignment Corpus Linguistics"
+author: "Hongxu Zhou"
+date: "February 2024"
+output:
+  pdf_document: default
+  html_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE, dpi=150)
+library(gutenbergr)
+library(stringr)
+library(tidyverse)
+library(janeaustenr)
+library(scales)
+library(tinytex)
+```
+
+## Goal
+
+The goal of this assignment is
+
+-   to familiarize yourself with the tidytext environment and to install
+    and load the basic libraries
+-   to produce and visualize word frequency statistics for a given text
+
+## Text Mining with R
+
+Read the [first chapter](http://tidytextmining.com/tidytext.html) of
+Text Mining with R.
+
+If you want to be able to actually run and modify the code in the
+examples, you can [download all the
+code](https://github.com/dgrtwo/tidy-text-mining) (Rmarkdown files and
+more) from github.
+
+The examples use specialized packages that are not included by default
+in your R distribution. Install these packages using install.packages().
+(I find it easiest to do this from the command line and not include it
+in the Rmarkdown, as installation needs to be done only once but does
+produce quite a bit of output.)
+
+## Gutenberg
+
+In this assignment you will produce a word frequency list for one of the
+authors included in the Gutenberg Project.
+
+-   Install and load the gutenbergr package. See the [gutenbergr
+    tutorial](https://ropensci.org/tutorials/gutenbergr_tutorial) for
+    some examples of how to search the metadata and download the actual
+    texts.
+
+-   Select an author such that the first letter of his/her last name
+    matches the first letter of your last name. You can use
+    gutenberg_works(author == ...) or string matching over the author
+    field to find (lists of) authors. (Note that the str_detect method
+    from the stringr library takes a regular expression as second
+    argument. The regular expression "\^B" for instance, matches only
+    with strings beginning with B).
+
+-   Download (some of) the texts of your selected author and store this
+    in a variable. (You can give a list of gutenberg_id's as argument to
+    the gutenberg_download function.)
+
+```{r}
+# get metadata
+books <- gutenberg_metadata
+
+# get the authors with their names staring with Z and in English
+filtered_books <- books %>% 
+  filter(
+    str_starts(author, "Z"), # author name starts with Z
+    language == "en", # language is English
+    has_text == TRUE # some books have no text why?
+  )
+
+# show the first three rows
+head(filtered_books, 5)
+```
+
+I will use the \*\* first three\*\* books above as the dataset for this
+assignment.
+
+## Preprocessing and word counting
+
+-   Apply the chapter detection from section 1.3 of Text Mining with R
+    to your texts. For this, ensure that the texts you chose have
+    chapter headings (otherwise, pick another author). Adapt the regular
+    expression if needed. (Note that the result of downloading a set of
+    texts is already a data frame, that can be used directly with
+    functions such as unnest_tokens. ) Do some spot checking to see that
+    (a) the detected chapter headings are correct and (b) you don't miss
+        chapter headings; show some examples. Does the number of
+        chapters match the number reported in the table of contents?
+-   Create a word frequency list for your author. Filter stop words.
+    What are the ten most frequent words in the texts of your author?
+    The workflow for this section is:
+
+
+```{r}
+library(tidytext)
+library(dplyr)
+
+# download the three books
+book_zitkala <- gutenberg_download(338)
+book_zerbe <- gutenberg_download(1445)
+book_zangwill <- gutenberg_download(6304)
+```
+
+Each of the three books has its own format of chapter headings. So, I
+will process them respectively before combining them into a single
+dataset.
+
+By checking the three books, we can see both `zangwill` and `zerbe` use
+chapter headings in the format of `Chapter I`, `Chapter II`, etc, while
+the chapter headings of `zangwill` are nested. However, the chapters in
+`zitkala` are like *IKTOMI AND THE DUCKS* and *IKTOMI'S BLANKET*. The
+different format of chapter headings requires different regular
+expressions to detect them.
+
+Each of the three books needs to be processed separately, then combined
+into one dataset.
+
+### Procesing Zangwill's book
+
+`Zangwill` is comprised of three **parts**. Each part contains multiple
+subsections. For the convenience of processing and analysis, I will
+regard each part as a chapter.
+
+```{r}
+zangwill_clean <- book_zangwill %>%
+  mutate(text = iconv(text, "latin1", "UTF-8", sub = "")) %>% # Convert the encoding
+  filter(nchar(text) > 0) %>% # Remove empty lines
+  mutate(
+    book = "WITHOUT PREJUDICE",
+    chapter = cumsum(str_detect(text, "^PART [IVX]+")), # Detect the chapter headings
+  )
+
+# Make all chapter numbers as characters
+zangwill_clean <- zangwill_clean %>%
+  mutate(chapter = as.character(chapter))
+```
+
+### Processing Zerbe's book
+
+The format of `Zerbe` is the most complicated among the three books. The
+chapter section in the front matter is in the format of `CHAPTER I`,
+`CHAPTER II`, etc., but also contains abstracts of each chapter. It makes
+the regex to detect the chapter headings more complicated.
+
+To make the regex easier and more robust, the front matter of the books
+will be removed. The main text starts at line 332 of the df, so I'll use it as the starting point for slicing.
+
+```{r}
+zerbe_clean <- book_zerbe %>% 
+  # Start from line 332
+  slice(332:n()) %>% 
+  # Keep the text column
+  select(gutenberg_id, text)
+
+# Now the regex will be very simple because the chapter headings are in the format of "Chapter I", "Chapter II", etc.
+
+# Add the columns of book title and chapter number
+zerbe_clean <- zerbe_clean %>% 
+  mutate(
+    book = "AEROPLANES",
+    chapter = cumsum(str_detect(text, "(?i)^chapter [IVXLC]+"))
+  ) 
+
+zerbe_clean <- zerbe_clean %>%
+  mutate(chapter = as.character(chapter))
+  
+```
+
+### Processing Zitkala's book
+
+`Zitkala` does not have chapter numbers, but the chapter headings are in
+the format of `IKTOMI AND THE DUCKS`, `IKTOMI'S BLANKET`, etc. For this
+book, I need to manually add the chapter numbers.
+
+```{r}
+zitkala_clean <- book_zitkala %>%
+  filter(nchar(text) > 0) %>% # Remove empty lines
+  mutate(book = "OLD INDIAN LEGENDS") %>% # Add the column of book title
+  # Start calculating the chapter number by the structure
+  mutate(
+    chapter_num = case_when(
+      # for the front matter, let the chapter number be 0
+      row_number() <= which(text == "CONTENTS") | 
+        str_detect(text, "^     [A-Z]") ~ 0, # the format of content is all caps with 5 spaces indent
+      # Main text part
+      TRUE ~ cumsum( # only +1 when there is a real chapter heading
+        str_detect(text, "^[A-Z][A-Z\\s,\\-]+$") & # chapter headings in main text don't use indent
+        !str_detect(text, "^     ") & # double check the indent
+        text != "OLD INDIAN LEGENDS" # exclude the book title
+      )
+    )
+  ) %>%
+  # fill the chapter number for the main text
+  group_by(chapter_num) %>%
+  fill(chapter_num) %>%
+  ungroup() %>%
+  # final chapter number
+  mutate(
+    chapter = if_else(chapter_num == 0,
+                     "0",
+                     paste(chapter_num))
+  ) %>% 
+  select(gutenberg_id, text, book, chapter)
+```
+
+We can do a quick check to see if the chapter headings are correctly
+detected.
+
+```{r}
+head(zangwill_clean, 5)
+tail(zangwill_clean, 5)
+head(zerbe_clean, 5)
+tail(zerbe_clean, 5)
+head(zitkala_clean, 5)
+tail(zitkala_clean, 5)
+```
+
+```{r}
+# Combine all books
+all_books <- bind_rows(
+  zangwill_clean,
+  zerbe_clean,
+  zitkala_clean
+)
+
+glimpse(all_books)
+```
+
+The result shows the dataset is securely combined. The nest step is to
+tokenise it and make the one-token-per-row format.
+
+```{r}
+tidy_books <- all_books %>%
+  unnest_tokens(word, text)
+```
+
+### Remove stop words
+
+```{r}
+data(stop_words) 
+
+tidy_books <- tidy_books %>%
+  anti_join(stop_words) 
+```
+
+## Calculate the word frequency & Visualisation
+
+-   Now create a comparison plot as in section 1.5 of Text Mining
+    with R. In your plot, compare your author against Jane Austen and
+    another author of your choice. Include the plot, and also report the
+    results of a correlation test, as in section 1.5. Are the results
+    what you would expect?
+
+First, check the general word frequency
+
+```{r}
+tidy_books %>%
+  count(word, sort = TRUE) 
+
+tidy_books %>%
+  count(word, sort = TRUE) %>% 
+  filter(n > 100) %>%  #filter the words with frequency > 600
+  mutate(word = reorder(word, n)) %>% #reorder the words by the frequency
+  ggplot(aes(n, word))+
+           geom_col()+
+           labs(y = NULL)
+```
+The first 9 out of 10 most frequent words are all commonly used. The 10th one, 
+*Iktomi*, is the name of a god in the book *OLD INDIAN LEGENDS*. 
+
+For author comparison, I will first compare the three authors with Jane
+Austen, then compare the three authors with each other.
+
+### Compare the three authors with Jane Austen
+
+Step 1: prepare the Jane Austen dataset
+
+```{r}
+book_ja <- austen_books() %>%
+  group_by(book) %>%
+  mutate(
+    chapter = cumsum(str_detect(text, regex("^chapter [\\divxlc]",
+                                            ignore_case = TRUE)))
+  ) %>% 
+  ungroup() %>% 
+  unnest_tokens(word, text, drop = TRUE) %>%
+  anti_join(stop_words)
+
+book_ja <- book_ja %>% 
+  mutate(chapter = as.character(chapter))
+```
+
+The shapes of two datasets are different. The dataset of `all_books` has
+an extra column of *gutenberg_id* which book_ja does no have. I need to
+normalise the Jane Austen dataset to make it comparable with the three
+authors dataset.
+
+I think it is better to add a new column of *id* to the Jane Austen
+dataset instead of removing it from the three authors dataset. Since the
+column of gutenberg_is is not directly useful for frequency analysis, I
+will use **4242** as the id for Jane Austen.
+
+```{r}
+book_ja <- book_ja %>%
+  mutate(gutenberg_id = 4242) %>%  # maintain data consistency
+  relocate(gutenberg_id)
+```
+
+Step 2: combine the Jane Austin dataset with the three authors dataset
+
+```{r}
+freq_comparison <- bind_rows(
+  # Add tags for the three books
+  tidy_books %>%
+    filter(book %in% c("WITHOUT PREJUDICE", 
+                       "AEROPLANES", 
+                       "OLD INDIAN LEGENDS")) %>%
+    mutate(source = book),  # use their book titles as tags
+  
+  # add Jane Austen's data as a reference
+  book_ja %>%
+    mutate(source = "Jane Austen")  # Universal tag for Jane Austen
+) %>%
+  
+  # Extract only the words
+  mutate(word = str_extract(word, "[a-z]+")) %>%
+  # Remove NA values
+  filter(!is.na(word)) %>%
+  # calculate the frequency of each word
+  count(source, word) %>%
+  # Calculate the proportion based on the source
+  group_by(source) %>%
+  mutate(proportion = n / sum(n)) %>%
+  # remove the original count column and keep the proportion column
+  select(-n) %>%
+  # Data reshaping -- long to wide
+  pivot_wider(names_from = source, values_from = proportion) %>%
+  # Data reshaping -- wide to long
+  pivot_longer(
+    c("WITHOUT PREJUDICE", "AEROPLANES", "OLD INDIAN LEGENDS"),
+    names_to = "book",
+    values_to = "proportion"
+  )
+
+# show results
+freq_comparison %>%
+  # Remove NA values
+  filter(!is.na(proportion), !is.na(`Jane Austen`)) %>%
+  # Plot the results
+  mutate(difference = proportion - `Jane Austen`) %>%
+  head(20)  # check the first 20 rows
+```
+
+```{r}
+# I copied and pasted the code from the book with necessary modifications
+ggplot(freq_comparison, aes(x = proportion, 
+                            y = `Jane Austen`, 
+                            color = abs(`Jane Austen` - proportion))) + 
+  
+  # Add a diagonal line for reference
+  geom_abline(color = "gray70", lty = 2) +
+  
+  # Add data points with random noise
+  geom_jitter(alpha = 0.1, size = 2.5, width = 0.3, height = 0.3) + 
+  
+  # Add text labels to the words 
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5) + 
+  
+  # Dont understand this part
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  
+  # Set up colour 
+  scale_color_gradient(limits = c(0, 0.001), 
+                       low = "darkslategray4", high = 'gray75') +
+  
+  # Creating separate plots for each book
+  facet_wrap(~book, ncol = 2) +
+  
+  # Removing the colour legend and setting axis labels
+  theme(legend.position = "none") +
+  labs(y = "Jane Austen", x = NULL)
+```
+
+Step 3: Use the book `zerbe` as the reference to compare the other two
+books
+
+```{r}
+# Reshape the data to use AEROPLANES as reference
+freq_aero_comparison <- bind_rows(
+    tidy_books %>%
+    filter(book %in% c("WITHOUT PREJUDICE", "AEROPLANES", "OLD INDIAN LEGENDS")) %>%
+    mutate(source = book)
+) %>%
+    mutate(word = str_extract(word, "[a-z]+")) %>%
+    count(source, word) %>%
+    group_by(source) %>%
+    mutate(proportion = n / sum(n)) %>%
+    select(-n) %>%
+    pivot_wider(names_from = source, values_from = proportion) %>%
+    pivot_longer(
+        c("WITHOUT PREJUDICE", "OLD INDIAN LEGENDS"),
+        names_to = "book",
+        values_to = "proportion"
+    )
+
+# Use the same vis code
+ggplot(freq_aero_comparison, 
+       aes(x = proportion,
+           y = AEROPLANES, # Proportion in AEROPLANES (new reference)
+           color = abs(AEROPLANES - proportion))) +  
+    
+    # Add a diagonal line for reference
+    geom_abline(color = "gray70", lty = 2) +
+    
+    # Add data points with random noise
+    geom_jitter(alpha = 0.1,                 
+                size = 2.5,                
+                width = 0.3,               
+                height = 0.3) +              
+    
+    # Add text labels to the words 
+    geom_text(aes(label = word), 
+              check_overlap = TRUE,          
+              vjust = 1.5) +                
+    
+    # Dont understand this part
+    scale_x_log10(labels = percent_format()) +
+    scale_y_log10(labels = percent_format()) +
+    
+    # Set up colour
+    scale_color_gradient(limits = c(0, 0.001),
+                        low = "seagreen4",   
+                        high = 'darkseagreen1') + # Changed the colour
+    
+    # Create separate plots for each comparison book
+    facet_wrap(~book, ncol = 2) +
+    
+    # Remove legend and set axis labels
+    theme(legend.position = "none") +        
+    labs(y = "AEROPLANES",                  
+         x = NULL,             
+         title = "Word Frequency Comparison with AEROPLANES")
+```
+
+Step 4: Correlation Test
+The textbook uses tidy formula notation being different from the one in R Doc.
+```{r}
+# tidy style cor test
+co_wp <- cor.test(data = freq_comparison[freq_comparison$book == "WITHOUT PREJUDICE", ],
+        ~ proportion + `Jane Austen`)
+
+co_oil <- cor.test(data = freq_comparison[freq_comparison$book == "OLD INDIAN LEGENDS", ],
+        ~ proportion + `Jane Austen`)
+
+co_aero <- cor.test(data = freq_comparison[freq_comparison$book == "AEROPLANES", ],
+        ~ proportion + `Jane Austen`)
+
+# Print the results
+cat("\nThe correlation report of book Without Prejudice is:\n")
+print(co_wp)
+
+cat("\nThe correlation report of book Old Indian Legends is:\n")
+print(co_oil)
+
+cat("\nThe correlation report of book Aeroplanes is:\n")
+print(co_aero)
+```
+
+-   We extracted the chapter headings, but haven't used them yet. Think
+    of some analysis or visualization that uses the chapter numbers;
+    e.g., you could plot the chapter lengths.
+
+For this task, I will calculate the distribution of modal verbs across
+the chapters of the three books. Modal verbs are a type of auxiliary
+verbs that express necessity, possibility, permission, or ability. The
+modal verbs include *can, could, may, might, shall, should, will, would,
+must. *Ought to* is considered as a semi-modal verb and so not included
+in this analysis.
+
+To do this analysis, the stop words need to be kept.
+
+```{r}
+# Set up a df for modal verbs analysis
+tidy_books_modal <- all_books %>%
+  unnest_tokens(word, text)
+```
+
+```{r}
+# Set up the vector of modal verbs
+modal_verbs <- c("can", "could", "will", 
+                 "would", "shall", "should", 
+                 "may", "might", "must")
+
+# Analysis by chapter
+modal_analysis <- tidy_books_modal %>%
+  filter(book %in% c("WITHOUT PREJUDICE", 
+                     "AEROPLANES", 
+                     "OLD INDIAN LEGENDS")) %>%
+  # Only keep the modal verbs
+  filter(word %in% modal_verbs) %>%
+  # Count occurrences by book, chapter, and specific modal verb
+  count(book, chapter, word) %>%
+  # Add book length information for normalisation
+  group_by(book, chapter) %>%
+  mutate(
+    # Calculate the total words in each chapter for normalisation
+    chapter_total = n(),
+    # Calculate the proportion of each modal verb
+    proportion = n / chapter_total
+  ) %>%
+  ungroup()
+
+# Visualisation
+ggplot(modal_analysis, 
+       aes(x = chapter, 
+           y = proportion, 
+           color = word)) +
+  # Use lines to show the progression
+  geom_line(size = 1, alpha = 0.7) +
+  # Add points for specific values
+  geom_point(size = 2) +
+  # Separate plots for each book
+  facet_wrap(~book, scales = "free_x") +
+  scale_color_brewer(palette = "Set2") +
+  theme_minimal() +
+  labs(
+    title = "Modal Verb Usage Across Chapters",
+    subtitle = "Tracking how the expression of possibility and necessity evolves",
+    x = "Chapter Number",
+    y = "Proportion of Modal Verbs",
+    color = "Modal Verb"
+  ) +
+  # Improve readability
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank()
+  )
+```
+---
+The End
